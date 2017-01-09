@@ -18,28 +18,15 @@
 
 #include <TH.h>
 #include <luaT.h>
+#include "generic/cell_type.h"
 #include "generic/tfluids.cu.h"
+#include "generic/stack_trace.cc"
 
 // This type is common to both float and double implementations and so has
 // to be defined outside tfluids.cc.
-typedef struct Int3 {
-  int32_t x;
-  int32_t y;
-  int32_t z;
-} Int3;
+#include "generic/int3.cu.h"
 
-inline int32_t IX(const int32_t i, const int32_t j, const int32_t k,
-                  const Int3& dims) {
-#if defined(DEBUG)
-  assert(i >= 0 && i < dims.x);
-  assert(j >= 0 && j < dims.y);
-  assert(k >= 0 && k < dims.z);
-#endif
-  return i + j * dims.x + k * dims.x * dims.y;
-}
-
-inline int32_t ClampInt32(const int32_t x, const int32_t low,
-                          const int32_t high) {
+inline int32_t clamp(const int32_t x, const int32_t low, const int32_t high) {
   return std::max<int32_t>(std::min<int32_t>(x, high), low);
 }
 
@@ -79,6 +66,15 @@ inline int32_t ClampInt32(const int32_t x, const int32_t low,
 
 #undef TH_GENERIC_FILE
 
+// setfieldint pushes the index and the field value on the stack, and then calls
+// lua_settable. The setfield function assumes that before the call the table
+// is at the top of the stack (index -1).
+void setfieldint(lua_State* L, const char* index, int value) {
+  lua_pushstring(L, index);
+  lua_pushnumber(L, value);
+  lua_settable(L, -3);
+}
+
 LUA_EXTERNC DLL_EXPORT int luaopen_libtfluids(lua_State *L) {
   tfluids_FloatMain_init(L);
   tfluids_DoubleMain_init(L);
@@ -99,6 +95,20 @@ LUA_EXTERNC DLL_EXPORT int luaopen_libtfluids(lua_State *L) {
   lua_newtable(L);
   luaT_setfuncs(L, tfluids_CudaMain_getMethodsTable(), 0);
   lua_setfield(L, -2, "cuda");
+
+  // Create the CellType enum table.
+  lua_newtable(L);
+  setfieldint(L, "TypeNone", TypeNone);
+  setfieldint(L, "TypeFluid", TypeFluid);
+  setfieldint(L, "TypeObstacle", TypeObstacle);
+  setfieldint(L, "TypeEmpty", TypeEmpty);
+  setfieldint(L, "TypeInflow", TypeInflow);
+  setfieldint(L, "TypeOutflow", TypeOutflow);
+  setfieldint(L, "TypeOpen", TypeOpen);
+  setfieldint(L, "TypeStick", TypeStick);
+  setfieldint(L, "TypeReserved", TypeReserved);
+  setfieldint(L, "TypeZeroPressure", TypeZeroPressure);
+  lua_setfield(L, -2, "CellType");
 
   return 1;
 }

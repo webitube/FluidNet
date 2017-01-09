@@ -13,11 +13,11 @@ IF(OPENMP_FOUND)
   SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 ENDIF(OPENMP_FOUND)
 
-FIND_PACKAGE(CUDA 4.0 REQUIRED)
+FIND_PACKAGE(CUDA 8.0 REQUIRED)
 #LIST(APPEND CUDA_NVCC_FLAGS "-arch=sm_35;--use_fast_math")
 
 #FIX for cuda 7.5 and gcc 5.x
-LIST(APPEND CUDA_NVCC_FLAGS "-arch=sm_35;--use_fast_math; -D_FORCE_INLINES;")
+LIST(APPEND CUDA_NVCC_FLAGS "-arch=sm_35;--use_fast_math; -D_FORCE_INLINES")
 MESSAGE("Compiling for CUDA architecture 3.5 -DBUILD_GL_FUNCS")
 FIND_PACKAGE(GLUT REQUIRED)
 FIND_PACKAGE(OpenGL REQUIRED)
@@ -35,12 +35,10 @@ INCLUDE_DIRECTORIES(${OpenGL_INCLUDE_DIRS})
 LINK_DIRECTORIES(${OpenGL_LIBRARY_DIRS})
 ADD_DEFINITIONS(${OpenGL_DEFINITIONS})
 
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fPIC -pedantic-errors")
-
 # THIS IS FOR CUDA 7.5 and gcc 5.x
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fPIC -D_MWAITXINTRIN_H_INCLUDED -D_FORCE_INLINE -D__STRICT_ANSI__ -DBUILD_GL_FUNCS")
 
-SET(luasrc init.lua test_tfluids.lua)
+SET(luasrc init.lua flags_to_occupancy.lua set_wall_bcs.lua test_tfluids.lua velocity_divergence.lua velocity_update.lua  volumetric_up_sampling_nearest.lua)
 SET(src init.cu generic/tfluids.cu generic/tfluids.cu.h)
 
 ADD_TORCH_PACKAGE(tfluids "${src}" "${luasrc}" "Torch Fluids utility lib.")

@@ -13,11 +13,9 @@
 -- limitations under the License.
 
 local nn = require('nn')
+local tfluids = require('tfluids')
 if nn.WeightedFlatMSECriterion == nil then
   dofile('weighted_flat_mse_criterion.lua')
-end
-if nn.VelocityDivergence == nil then
-  dofile('velocity_divergence.lua')
 end
 if nn.FluidCriterion == nil then
   dofile('fluid_criterion.lua')
@@ -78,13 +76,13 @@ function test.FluidCriterion()
 
   for scaleInvariant = 0, 1 do
     for sizeAverage = 0, 1 do
-      for twoDim = 0, 1 do
+      for is3D = 0, 1 do
         for addP = 0, 1 do
           for addU = 0, 1 do
             for addDiv = 0, 1 do
               local numUChan = 3
               local curD = d
-              if twoDim == 1 then
+              if is3D == 0 then
                 numUChan = 2
                 curD = 1
               end
@@ -93,7 +91,7 @@ function test.FluidCriterion()
                   torch.rand(batchSz, 1, curD, h, w):mul(2):add(-1),  -- p
                   torch.rand(
                       batchSz, numUChan, curD, h, w):mul(2):add(-1),  -- U
-                  torch.rand(batchSz, 1, curD, h, w):gt(0.8):double()  -- geom
+                  torch.rand(batchSz, 1, curD, h, w):gt(0.8):double()  -- flags
               }
    
               local pLambda = torch.rand(1):add(1)[1]  -- in [1, 2]

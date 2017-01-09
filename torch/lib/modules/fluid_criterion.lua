@@ -22,7 +22,7 @@
 -- It also assumes the target is a table of size 2:
 -- target[1] = pTarget (batch x 1 x depth x height x width)
 -- target[2] = UTarget (batch x 2/3 x depth x height x width)
--- target[3] = geom (batch x 1 x depth x height x width)
+-- target[3] = flags (batch x 1 x depth x height x width)
 --
 -- So, for 2D fields, the size(2) of U is 2 and the depth is assumed to be 1.
 --
@@ -54,11 +54,11 @@ function FluidCriterion:__init(pLambda, uLambda, divLambda, scaleInvariant)
   else
     self._pLoss = nn.MSESICriterion(4)  -- numNonBatchDim
     self._uLoss = nn.MSESICriterion(4)
-    self._divLoss = nn.MSESICriterion(3)
+    self._divLoss = nn.MSESICriterion(4)
   end
 
   -- Network to calculate velocity divergence.
-  self._divNetwork = nn.VelocityDivergence()
+  self._divNetwork = tfluids.VelocityDivergence()
 
   self.sizeAverage = true
 
@@ -71,34 +71,31 @@ function FluidCriterion:getTargets(target)
   
   local pTarget = target[1]
   local UTarget = target[2]
-  local geom = target[3]
+  local flags = target[3]
 
   assert(pTarget:dim() == 5 and UTarget:dim() == 5)
-  local twoDim = UTarget:size(2) == 2
+  local is3D = UTarget:size(2) == 3
   assert(pTarget:size(1) == UTarget:size(1))  -- nBatch
   assert(pTarget:size(2) == 1)
-  if not twoDim then
+  if is3D then
     assert(UTarget:size(2) == 3)
   end
   assert(pTarget:size(3) == UTarget:size(3))  -- zdim
-  if twoDim then
+  if not is3D then
     assert(pTarget:size(3) == 1)
   end
   assert(pTarget:size(4) == UTarget:size(4))  -- ydim
   assert(pTarget:size(5) == UTarget:size(5))  -- xdim
-  assert(pTarget:isSameSizeAs(geom))
-
-  -- Remove the "feature" dimension from geom.
-  geom = geom:select(2, 1)
+  assert(pTarget:isSameSizeAs(flags))
 
   -- Create a dummy tensor for divergence that is all zeros (we'll use MSE
   -- to a zero target as the criterion).
-  if not self._divUTarget:isSameSizeAs(geom) then
-    self._divUTarget:resizeAs(geom)
+  if not self._divUTarget:isSameSizeAs(flags) then
+    self._divUTarget:resizeAs(flags)
     self._divUTarget:fill(0)  -- if branch avoids spurious fill(0) calls.
   end
 
-  return pTarget, UTarget, self._divUTarget, twoDim, geom
+  return pTarget, UTarget, self._divUTarget, is3D, flags
 end
 
 function FluidCriterion:getInputs(input)
@@ -108,27 +105,27 @@ function FluidCriterion:getInputs(input)
   local UPred = input[2]
 
   assert(pPred:dim() == 5 and UPred:dim() == 5)
-  local twoDim = UPred:size(2) == 2
+  local is3D = UPred:size(2) == 3
   assert(pPred:size(1) == UPred:size(1))  -- nBatch
   assert(pPred:size(2) == 1)
-  if not twoDim then
+  if is3D then
     assert(UPred:size(2) == 3)
   end
   assert(pPred:size(3) == UPred:size(3))
-  if twoDim then
+  if not is3D then
     assert(pPred:size(3) == 1)
   end
   assert(pPred:size(4) == UPred:size(4))
   assert(pPred:size(5) == UPred:size(5))
 
-  return pPred, UPred, twoDim
+  return pPred, UPred, is3D
 end
 
 function FluidCriterion:updateOutput(input, target)
-  local pPred, UPred, twoDim = self:getInputs(input)
-  local pTarget, UTarget, divUTarget, twoDimTarget, geom =
+  local pPred, UPred, is3D = self:getInputs(input)
+  local pTarget, UTarget, divUTarget, is3DTarget, flags =
       self:getTargets(target)
-  assert(twoDim == twoDimTarget)
+  assert(is3D == is3DTarget)
 
   -- Propagate sizeAverage value to sub-modules.
   self._pLoss.sizeAverage = self.sizeAverage
@@ -150,7 +147,7 @@ function FluidCriterion:updateOutput(input, target)
   end
   if self.divLambda > 0 then
     -- Calculate the divergence of the predicted velocity.
-    local divUPred = self._divNetwork:forward({UPred, geom})
+    local divUPred = self._divNetwork:forward({UPred, flags})
     self.divLoss = self.divLambda *
         self._divLoss:updateOutput(divUPred, divUTarget)
   else
@@ -165,12 +162,12 @@ end
 
 function FluidCriterion:updateGradInput(input, target)
   -- Assume updateOutput has already been called (a standard torch assumption).
-  local pPred, UPred, twoDim = self:getInputs(input)
-  local pTarget, UTarget, divUTarget, twoDimTarget, geom =
+  local pPred, UPred, is3D = self:getInputs(input)
+  local pTarget, UTarget, divUTarget, is3DTarget, flags =
       self:getTargets(target)
   local divUPred = self._divNetwork.output
 
-  assert(twoDim == twoDimTarget)
+  assert(is3D == is3DTarget)
 
   -- Calculate the gradInput for each loss.
   local pGradInput
@@ -188,8 +185,9 @@ function FluidCriterion:updateGradInput(input, target)
     divGradInput = self._divLoss:updateGradInput(divUPred, divUTarget)
     divGradInput:mul(self.divLambda)
     -- BPROP through the divergence network.
-    divGradInput = self._divNetwork:updateGradInput({UPred, geom}, divGradInput)
-    divGradInput = divGradInput[1]  -- just U component (ignore geom deriv).
+    divGradInput = self._divNetwork:updateGradInput({UPred, flags},
+                                                    divGradInput)
+    divGradInput = divGradInput[1]  -- just U component (ignore flags deriv).
   end
 
   -- Now set the input gradients.
