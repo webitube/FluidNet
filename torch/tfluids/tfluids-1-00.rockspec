@@ -10,7 +10,7 @@ description = {
    detailed = [[
    ]],
    homepage = "",
-   license = "PRIVATE TO JONATHAN TOMPSON AND KRIS SCHLACTER"
+   license = "Apache V2.0"
 }
 
 dependencies = {

@@ -32,6 +32,7 @@ local mytester = torch.Tester()
 local test = torch.TestSuite()
 local times = {}
 local profileTimeSec = 1
+local jac = nn.Jacobian
 
 function test.MoveImpulseWithinImage2D()
   local methods = {'euler', 'rk2'}
@@ -101,39 +102,6 @@ local function profileCuda(func, name, args)
     func(unpack(args))
   end   
   tm.gpu = a:time().real / count
-end
-
-function test.averageBorderCellsCUDA()
-  -- TODO(tompson): Write a test of the forward function.
-
-  -- Test that the float and cuda implementations are the same.
-  local nchan = {2, 3}
-  local d = {1, torch.random(32, 64)}
-  local w = torch.random(32, 64)
-  local h = torch.random(32, 64)
-  local case = {'2D', '3D'}
-
-  for testId = 1, 2 do
-    -- 2D and 3D cases.
-    local geom = torch.rand(d[testId], h, w):gt(0.8):float()
-    local input = torch.rand(nchan[testId], d[testId], h, w):float()
-    local outputCPU = input:clone()
-
-    -- Perform the function on the CPU.
-    tfluids.averageBorderCells(input, geom, outputCPU)
-
-    -- Perform the function on the GPU.
-    local outputGPU = input:cuda()
-    tfluids.averageBorderCells(input:cuda(), geom:cuda(), outputGPU)
-
-    -- Compare the results.
-    local maxErr = (outputCPU - outputGPU:float()):abs():max()
-    mytester:assertlt(maxErr, precision,
-                      'averageBorderCells CUDA ERROR ' .. case[testId])
-
-    profileCuda(tfluids.averageBorderCells,
-                'averageBorderCells' .. case[testId], {input, geom, outputCPU})
-  end
 end
 
 function test.vorticityConfinementCUDA()
@@ -484,7 +452,7 @@ function test.interpField()
   -- TODO(tompson,kris): Is this enough test cases?
 end
 
-function test.setObstacleBcs()
+function test.setGeomVelForAdvection()
   local nchan = {2, 3}
   local d = {1, torch.random(32, 64)}
   local w = torch.random(32, 64)
@@ -508,7 +476,7 @@ function test.setObstacleBcs()
     end
 
     -- Set the internal U values.
-    tfluids.setObstacleBcs(U, geom)
+    tfluids.setGeomVelForAdvection(U, geom)
 
     -- Now interpolate a value at one of the geometry faces and make sure
     -- the velocity component is zero.
@@ -562,7 +530,7 @@ function test.setObstacleBcs()
   end
 end
 
-function test.setObstacleBcsCUDA()
+function test.setGeomVelForAdvectionCUDA()
   -- TODO(tompson): Write a test of the forward function.
 
   -- Test that the float and cuda implementations are the same.
@@ -579,20 +547,82 @@ function test.setObstacleBcsCUDA()
     local UCPU = U:clone()
 
     -- Perform the function on the CPU.
-    tfluids.setObstacleBcs(UCPU, geom)
+    tfluids.setGeomVelForAdvection(UCPU, geom)
 
     -- Perform the function on the GPU.
     local UGPU = U:cuda()
-    tfluids.setObstacleBcs(UGPU, geom:cuda())
+    tfluids.setGeomVelForAdvection(UGPU, geom:cuda())
 
     -- Compare the results.
     local maxErr = (UCPU - UGPU:float()):abs():max()
     mytester:assertlt(maxErr, precision,
-                      'setObstacleBcs CUDA ERROR ' .. case[testId])
+                      'setGeomVelForAdvection CUDA ERROR ' .. case[testId])
     
-    profileCuda(tfluids.setObstacleBcs, 'setObstacleBcs2D' .. case[testId],
+    profileCuda(tfluids.setGeomVelForAdvection,
+                'setGeomVelForAdvection2D' .. case[testId],
                 {U, geom})
   end
+end
+
+function test.VolumetricUpSamplingNearest()
+  local batchSize = torch.random(1, 5)
+  local nPlane = torch.random(1, 5)
+  local widthIn = torch.random(5, 8)
+  local heightIn = torch.random(5, 8)
+  local depthIn = torch.random(5, 8)
+  local ratio = torch.random(1, 3)
+
+  local module = tfluids.VolumetricUpSamplingNearest(ratio)
+
+  local input = torch.rand(batchSize, nPlane, depthIn, heightIn, widthIn)
+  local output = module:forward(input):clone()
+
+  assert(output:dim() == 5)
+  assert(output:size(1) == batchSize)
+  assert(output:size(2) == nPlane)
+  assert(output:size(3) == depthIn * ratio)
+  assert(output:size(4) == heightIn * ratio)
+  assert(output:size(5) == widthIn * ratio)
+
+  local outputGT = torch.Tensor():resizeAs(output)
+  for b = 1, batchSize do
+    for f = 1, nPlane do
+      for z = 1, depthIn * ratio do
+        local zIn = math.floor((z - 1) / ratio) + 1
+        for y = 1, heightIn * ratio do
+          local yIn = math.floor((y - 1) / ratio) + 1
+          for x = 1, widthIn * ratio do
+            local xIn = math.floor((x - 1) / ratio) + 1
+            outputGT[{b, f, z, y, x}] = input[{b, f, zIn, yIn, xIn}]
+          end
+        end
+      end
+    end
+  end
+
+  -- Note FPROP should be exact (it's just a copy).
+  mytester:asserteq((output - outputGT):abs():max(), 0, 'error on fprop')
+
+  -- Generate a valid gradInput (we'll use it to test the GPU implementation).
+  local gradOutput = torch.rand(batchSize, nPlane, depthIn * ratio,
+                                heightIn * ratio, widthIn * ratio);
+  local gradInput = module:backward(input, gradOutput):clone()
+
+  -- Perform the function on the GPU.
+  module:cuda()
+  local outputGPU = module:forward(input:cuda()):double()
+  mytester:assertle((output - outputGPU):abs():max(), precision,
+                    'error on GPU fprop')
+
+  local gradInputGPU =
+      module:backward(input:cuda(), gradOutput:cuda()):double()
+  mytester:assertlt((gradInput - gradInputGPU):abs():max(), precision,
+                    'error on GPU bprop')
+
+  -- Check BPROP is correct.
+  module:double()
+  local err = jac.testJacobian(module, input)
+  mytester:assertlt(err, precision, 'error on bprop')
 end
 
 -- Now run the test above
@@ -614,20 +644,27 @@ function tfluids.test(tests, seed, gpuDevice)
   cutorch.manualSeed(seed)
   mytester:run(tests)
 
-  print ''
-  print('-----------------------------------------------------------------' ..
-        '-------------')
-  print('| Module                                                       ' ..
-        '| Speedup     |')
-  print('-----------------------------------------------------------------' ..
-        '-------------')
-  for module, tm in pairs(times) do
-    local str = string.format('| %-60s | %6.2f      |', module,
-                              (tm.cpu / tm.gpu))
-    print(str)
+  numTimes = 0
+  for _, _ in pairs(times) do
+    numTimes = numTimes + 1
   end
-  print('-----------------------------------------------------------------' ..
-        '-------------')
+
+  if numTimes > 0 then
+    print ''
+    print('-----------------------------------------------------------------' ..
+          '-------------')
+    print('| Module                                                       ' ..
+          '| Speedup     |')
+    print('-----------------------------------------------------------------' ..
+          '-------------')
+    for module, tm in pairs(times) do
+      local str = string.format('| %-60s | %6.2f      |', module,
+                                (tm.cpu / tm.gpu))
+      print(str)
+    end
+    print('-----------------------------------------------------------------' ..
+          '-------------')
+  end
 
   cutorch.setDevice(curDevice)
 

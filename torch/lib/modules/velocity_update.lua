@@ -27,7 +27,7 @@ local VelocityUpdate, parent =
 function VelocityUpdate:__init(matchManta)
   parent.__init(self)
   if matchManta == nil then
-    self.matchManta = false
+    self.matchManta = true
   else
     self.matchManta = matchManta
   end

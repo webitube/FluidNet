@@ -73,15 +73,10 @@ function torch.runEpoch(input)
 
   -- Create a parallel data container to synchronously create batches (very
   -- important for the 2D model since diskIO becomes the bottleneck).
-  local function initThreadFunc()
-    -- Recall: All threads must be initialized with all classes and packages.
-    dofile('lib/fix_file_references.lua')
-    dofile('lib/load_package_safe.lua')
-    dofile('lib/data_binary.lua')
-  end
   local singleThreaded = false  -- Set to true for easier debugging.
   local parallel = torch.DataParallel(conf.numDataThreads, data, dataInds,
-                                      conf.batchSize, initThreadFunc,
+                                      conf.batchSize,
+                                      torch.DataBinary.initThreadFunc,
                                       singleThreaded)
 
   if training then

@@ -40,7 +40,7 @@ ADD_DEFINITIONS(${OpenGL_DEFINITIONS})
 # THIS IS FOR CUDA 7.5 and gcc 5.x
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fPIC -D_MWAITXINTRIN_H_INCLUDED -D_FORCE_INLINE -D__STRICT_ANSI__ -DBUILD_GL_FUNCS")
 
-SET(luasrc init.lua test_tfluids.lua)
+SET(luasrc init.lua test_tfluids.lua volumetric_up_sampling_nearest.lua)
 SET(src init.cu generic/tfluids.cu generic/tfluids.cu.h)
 
 ADD_TORCH_PACKAGE(tfluids "${src}" "${luasrc}" "Torch Fluids utility lib.")

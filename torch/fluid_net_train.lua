@@ -28,6 +28,7 @@ local paths = require('paths')
 local optim = require('optim')
 local ProFi = torch.loadPackageSafe('ProFi')
 local mattorch = torch.loadPackageSafe('mattorch')
+local gnuplot = torch.loadPackageSafe('gnuplot')
 
 -- ****************************** Define Config ********************************
 local conf = torch.defaultConf()  -- Table with configuration and model params.
@@ -115,10 +116,19 @@ else
   mconf.optimizationMethod = "default-sgd"
 end
 
--- ************************ a Visualize Training Batch *************************
+-- ************************ Visualize a Training Batch *************************
 --[[
 _tr:visualizeBatch(_conf, _mconf)  -- Visualize random batch.
 _tr:visualizeBatch(_conf, _mconf, {1})  -- Explicitly define batch samples.
+--]]
+
+-- *********************** Calculate dataset statistics ************************
+-- Calculate some statistics about the input channels to the network.
+--[[
+trMean, trStd, trL2 = _tr:calcDataStatistics(_conf, _mconf)
+_tr:plotDataStatistics(trMean, trStd, trL2)
+teMean, teStd, teL2 = _te:calcDataStatistics(_conf, _mconf)
+_te:plotDataStatistics(teMean, teStd, teL2)
 --]]
 
 -- ************************ Profile the model for the paper ********************

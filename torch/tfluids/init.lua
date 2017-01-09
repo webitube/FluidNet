@@ -119,37 +119,20 @@ local function vorticityConfinement(dt, scale, u, geom, curl, magCurl)
 end
 rawset(tfluids, 'vorticityConfinement', vorticityConfinement)
 
--- Do a local averaging for all the border cells.
--- @param tensor - Tensor of size (nchan x depth x height x width).
--- @param geom - occupancy grid of size (depth x height x width).
--- @param ret - Output tensor of size(tensor).
-local function averageBorderCells(tensor, geom, ret)
-  assert(torch.isTensor(tensor) and torch.isTensor(ret) and
-         torch.isTensor(geom))
-  assert(tensor:isSameSizeAs(ret), 'Size mismatch.')
-  assert(tensor:dim() == 4, '4D tensor expected')
-  assert(geom:dim() == 3)
-  assert(geom:size(1) == ret:size(2) and geom:size(2) == ret:size(3) and
-         geom:size(3) == ret:size(4))
-  assert(geom:isContiguous() and tensor:isContiguous() and
-         ret:isContiguous())
-  tensor.tfluids.averageBorderCells(tensor, geom, ret)
-end
-rawset(tfluids, 'averageBorderCells', averageBorderCells)
-
--- Set internal obstacle boundary conditions.
+-- Set internal obstacle velocity so that interpolations at the geometry face
+-- result in zero velocity along the face normal.
 -- @param U - Tensor of size (2/3 x depth x height x width).
 -- @param geom - occupancy grid of size (depth x height x width).
-local function setObstacleBcs(U, geom)
+local function setGeomVelForAdvection(U, geom)
   assert(torch.isTensor(U) and torch.isTensor(geom))
   assert(U:dim() == 4, '4D tensor expected')
   assert(geom:dim() == 3)
   assert(geom:size(1) == U:size(2) and geom:size(2) == U:size(3) and
          geom:size(3) == U:size(4))
   assert(geom:isContiguous() and U:isContiguous())
-  U.tfluids.setObstacleBcs(U, geom)
+  U.tfluids.setGeomVelForAdvection(U, geom)
 end
-rawset(tfluids, 'setObstacleBcs', setObstacleBcs)
+rawset(tfluids, 'setGeomVelForAdvection', setGeomVelForAdvection)
 
 
 -- Interpolate field (exposed for debugging) using trilinear interpolation.
@@ -326,6 +309,8 @@ local function calcVelocityDivergenceBackward(gradU, U, geom, gradOutput)
 end
 rawset(tfluids, 'calcVelocityDivergenceBackward',
        calcVelocityDivergenceBackward)
+
+include('volumetric_up_sampling_nearest.lua')
 
 -- Also include the test framework.
 include('test_tfluids.lua')

@@ -25,7 +25,7 @@ local tfluids = require('tfluids')
 local VelocityDivergence, parent =
   torch.class('nn.VelocityDivergence', 'nn.Module')
 
-function VelocityDivergence:__init(matchManta)
+function VelocityDivergence:__init()
   parent.__init(self)
   self.gradInput = {torch.Tensor(), torch.Tensor()}
 end

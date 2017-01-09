@@ -174,7 +174,7 @@ static inline real tfluids_(Main_GetInterpValue)(
   // interpolation:
   // 1. The particle trace is gaurenteed to return a position that is NOT within
   // geometry (but can be epsilon away from a geometry wall).
-  // 2. We have called setObstacleBcs prior to running advection which
+  // 2. We have called setGeomVelForAdvection prior to running advection which
   // allows us to interpolate one level into geometry without violating
   // constraints (it does so by setting geometry velocities such that the face
   // velocity is zero).
@@ -389,7 +389,7 @@ static void tfluids_(Main_vorticityConfinement)(
   const Int3& dims, real* curl_u, real* curl_v, real* curl_w, real* mag_curl) {
   const bool two_dim = w == nullptr;
   if (!(two_dim == (curl_w == nullptr))) {
-    printf("Error: vorticityConfinement two_ddim does not match 'w' input.\n");
+    printf("Error: vorticityConfinement two_dim does not match 'w' input.\n");
     exit(-1);
   }
 
@@ -1069,84 +1069,7 @@ static int tfluids_(Main_vorticityConfinement)(lua_State *L) {
   return 0;  // Number of return values on the lua stack.
 }
 
-static int tfluids_(Main_averageBorderCells)(lua_State *L) {
-  THTensor* in =
-      reinterpret_cast<THTensor*>(luaT_checkudata(L, 1, torch_Tensor));
-  THTensor* geom =
-      reinterpret_cast<THTensor*>(luaT_checkudata(L, 2, torch_Tensor));
-  THTensor* out =
-      reinterpret_cast<THTensor*>(luaT_checkudata(L, 3, torch_Tensor));
-  if (in->nDimension != 4 || geom->nDimension != 3) {
-    luaL_error(L, "Input tensor should be 4D and geom should be 3D");
-  }
-  const int32_t nchan = in->size[0];
-  const int32_t zdim = in->size[1];
-  const int32_t ydim = in->size[2];
-  const int32_t xdim = in->size[3];
-
-  const bool two_dim = zdim == 1;
-
-  real* in_data = THTensor_(data)(in);
-  real* out_data = THTensor_(data)(out);
-  real* geom_data = THTensor_(data)(geom);
-
-  // Average the pixels in a neighborhood. We want the average to be
-  // symmetric and so should be all surrounding neighbors.
-  // Store the result in out.
-  int32_t c, z, y, x, zoff, yoff, xoff;
-#pragma omp parallel for private(c,z,y,x,zoff,yoff,xoff) collapse(4)
-  for (c = 0; c < nchan; c++) {
-    for (z = 0; z < zdim; z++) {
-      for (y = 0; y < ydim; y++) {
-        for (x = 0; x < xdim; x++) {
-          const int32_t idst = (c * xdim * ydim * zdim) + (z * xdim * ydim) +
-              (y * xdim) + x;
-          if ((!two_dim && (z == 0 || z == (zdim - 1))) ||
-              y == 0 || y == (ydim - 1) ||
-              x == 0 || x == (xdim - 1)) {
-            // We're a border pixel.
-            // TODO(tompson): This is an O(n^3) iteration to find a small
-            // sub-set of the pixels. Fix it.
-            real mean = 0;
-            int32_t count = 0;
-            // Count and sum the number of non-geometry and in-boundary pixels.
-            for (zoff = z - 1; zoff <= z + 1; zoff++) {
-              for (yoff = y - 1; yoff <= y + 1; yoff++) {
-                for (xoff = x - 1; xoff <= x + 1; xoff++) {
-                  if (zoff >= 0 && zoff < zdim &&
-                      yoff >= 0 && yoff < ydim &&
-                      xoff >= 0 && xoff < xdim) {
-                    // The neighbor is on the image.
-                    const int32_t ipix = (zoff * xdim * ydim) + (yoff * xdim) +
-                        xoff;
-                    if (geom_data[ipix] < static_cast<real>(1e-6)) {
-                      // The neighbor is NOT geometry.
-                      count++;
-                      mean += in_data[(c * xdim * ydim * zdim) + ipix];
-                    }
-                  }
-                }
-              }
-            }
-            if (count > 0) {
-              out_data[idst] = mean / static_cast<real>(count);
-            } else {
-              // No non-geom pixels found. Just copy over result.
-              out_data[idst] = in_data[idst];
-            }
-          } else {
-            // Internal cell, just copy the result.
-            out_data[idst] = in_data[idst];
-          }
-        }
-      }
-    }
-  }
-
-  return 0;
-}
-
-static int tfluids_(Main_setObstacleBcs)(lua_State *L) {
+static int tfluids_(Main_setGeomVelForAdvection)(lua_State *L) {
   THTensor* U =
       reinterpret_cast<THTensor*>(luaT_checkudata(L, 1, torch_Tensor));
   THTensor* geom =
@@ -1186,7 +1109,7 @@ static int tfluids_(Main_setObstacleBcs)(lua_State *L) {
 
   int32_t k, j, i;
   // Now accumulate velocity into geometry cells so that the face velocity
-  //components are zero.
+  // components are zero.
 #pragma omp parallel for private(k,j,i) collapse(3)
   for (k = 0; k < zdim; k++) {  
     for (j = 0; j < ydim; j++) { 
@@ -1473,10 +1396,10 @@ static inline void tfluids_(Main_calcVelocityUpdateAlongDim)(
   // Look at the neighbor to the right (pos) and to the left (neg).
   bool geomPos = false;
   bool geomNeg = false;
-  if (pos[dim] == 0) {
+  if (pos[dim] <= 0) {
     geomNeg = true;  // Treat going off the fluid as geometry.
   }
-  if (pos[dim] == size[dim] - 1) {
+  if (pos[dim] >= size[dim] - 1) {
     geomPos = true;  // Treat going off the fluid as geometry. 
   }
   if (pos[dim] > 0) {
@@ -1747,10 +1670,10 @@ static inline void tfluids_(Main_calcVelocityDivergenceCell)(
     // Look at the neighbor to the right (pos) and to the left (neg).
     bool geomPos = false;
     bool geomNeg = false;
-    if (pos[dim] == 0) {
+    if (pos[dim] <= 0) {
       geomNeg = true;  // Treat going off the fluid as geometry.
     }
-    if (pos[dim] == size[dim] - 1) {
+    if (pos[dim] >= size[dim] - 1) {
       geomPos = true;  // Treat going off the fluid as geometry. 
     }
     if (pos[dim] > 0) {
@@ -1858,10 +1781,10 @@ static inline void tfluids_(Main_calcVelocityDivergenceCellBackward)(
     // Look at the neighbor to the right (pos) and to the left (neg).
     bool geomPos = false;
     bool geomNeg = false;
-    if (pos[dim] == 0) {
+    if (pos[dim] <= 0) {
       geomNeg = true;  // Treat going off the fluid as geometry.
     }
-    if (pos[dim] == size[dim] - 1) {
+    if (pos[dim] >= size[dim] - 1) {
       geomPos = true;  // Treat going off the fluid as geometry. 
     }
     if (pos[dim] > 0) {
@@ -1951,6 +1874,128 @@ static int tfluids_(Main_calcVelocityDivergenceBackward)(lua_State *L) {
   return 0;
 }
 
+static int tfluids_(Main_volumetricUpSamplingNearestForward)(lua_State *L) {
+  const int32_t ratio = static_cast<int32_t>(lua_tointeger(L, 1));
+  THTensor* input =
+      reinterpret_cast<THTensor*>(luaT_checkudata(L, 2, torch_Tensor));
+  THTensor* output =
+      reinterpret_cast<THTensor*>(luaT_checkudata(L, 3, torch_Tensor));
+
+  if (input->nDimension != 5 || output->nDimension != 5) {
+    luaL_error(L, "ERROR: input and output must be dim 5");
+  }
+
+  const int32_t nbatch = input->size[0];
+  const int32_t nfeat = input->size[1];
+  const int32_t zdim = input->size[2];
+  const int32_t ydim = input->size[3];
+  const int32_t xdim = input->size[4];
+
+  if (output->size[0] != nbatch || output->size[1] != nfeat ||
+      output->size[2] != zdim * ratio || output->size[3] != ydim * ratio ||
+      output->size[4] != xdim * ratio) {
+    luaL_error(L, "ERROR: input : output size mismatch.");
+  }
+
+  const real* input_data = THTensor_(data)(input);
+  real* output_data = THTensor_(data)(output);
+
+  int32_t b, f, z, y, x;
+#pragma omp parallel for private(b, f, z, y, x) collapse(5)
+  for (b = 0; b < nbatch; b++) {
+    for (f = 0; f < nfeat; f++) {
+      for (z = 0; z < zdim * ratio; z++) {
+        for (y = 0; y < ydim * ratio; y++) {
+          for (x = 0; x < xdim * ratio; x++) {
+            const int64_t iout = output->stride[0] * b + output->stride[1] * f +
+                output->stride[2] * z +
+                output->stride[3] * y + 
+                output->stride[4] * x;
+            const int64_t iin = input->stride[0] * b + input->stride[1] * f +
+                input->stride[2] * (z / ratio) +
+                input->stride[3] * (y / ratio) +
+                input->stride[4] * (x / ratio);
+            output_data[iout] = input_data[iin];
+          }
+        }
+      }
+    }
+  }
+  return 0;
+}
+
+static int tfluids_(Main_volumetricUpSamplingNearestBackward)(lua_State *L) {
+  const int32_t ratio = static_cast<int32_t>(lua_tointeger(L, 1));
+  THTensor* input =
+      reinterpret_cast<THTensor*>(luaT_checkudata(L, 2, torch_Tensor));
+  THTensor* grad_output =
+      reinterpret_cast<THTensor*>(luaT_checkudata(L, 3, torch_Tensor));
+  THTensor* grad_input =
+      reinterpret_cast<THTensor*>(luaT_checkudata(L, 4, torch_Tensor));
+
+  if (input->nDimension != 5 || grad_output->nDimension != 5 ||
+      grad_input->nDimension != 5) {
+    luaL_error(L, "ERROR: input, gradOutput and gradInput must be dim 5");
+  }
+
+  const int32_t nbatch = input->size[0];
+  const int32_t nfeat = input->size[1];
+  const int32_t zdim = input->size[2];
+  const int32_t ydim = input->size[3];
+  const int32_t xdim = input->size[4];
+
+  if (grad_output->size[0] != nbatch || grad_output->size[1] != nfeat ||
+      grad_output->size[2] != zdim * ratio ||
+      grad_output->size[3] != ydim * ratio ||
+      grad_output->size[4] != xdim * ratio) {
+    luaL_error(L, "ERROR: input : gradOutput size mismatch.");
+  }
+
+  if (grad_input->size[0] != nbatch || grad_input->size[1] != nfeat ||
+      grad_input->size[2] != zdim || grad_input->size[3] != ydim ||
+      grad_input->size[4] != xdim) {
+    luaL_error(L, "ERROR: input : gradInput size mismatch.");
+  }
+
+  const real* input_data = THTensor_(data)(input);
+  const real* grad_output_data = THTensor_(data)(grad_output);
+  real * grad_input_data = THTensor_(data)(grad_input);
+
+  int32_t b, f, z, y, x;
+#pragma omp parallel for private(b, f, z, y, x) collapse(5)
+  for (b = 0; b < nbatch; b++) {
+    for (f = 0; f < nfeat; f++) {
+      for (z = 0; z < zdim; z++) {
+        for (y = 0; y < ydim; y++) {
+          for (x = 0; x < xdim; x++) {
+            const int64_t iout = grad_input->stride[0] * b +
+                grad_input->stride[1] * f +
+                grad_input->stride[2] * z +
+                grad_input->stride[3] * y +
+                grad_input->stride[4] * x;
+            float sum = static_cast<real>(0);
+            // Now accumulate gradients from the upsampling window.
+            for (int32_t zup = 0; zup < ratio; zup++) {
+              for (int32_t yup = 0; yup < ratio; yup++) {
+                for (int32_t xup = 0; xup < ratio; xup++) {
+                  const int64_t iin = grad_output->stride[0] * b +
+                      grad_output->stride[1] * f +
+                      grad_output->stride[2] * (z * ratio + zup) +
+                      grad_output->stride[3] * (y * ratio + yup) +
+                      grad_output->stride[4] * (x * ratio + xup);
+                  sum += grad_output_data[iin];
+                }
+              }
+            }
+            grad_input_data[iout] = sum;
+          }
+        }
+      }
+    }
+  }
+  return 0;
+}
+
 static int tfluids_(Main_solveLinearSystemPCG)(lua_State *L) {
   luaL_error(L, "ERROR: solveLinearSystemPCG not defined for CPU tensors.");
   return 0;
@@ -1960,8 +2005,7 @@ static const struct luaL_Reg tfluids_(Main__) [] = {
   {"advectScalar", tfluids_(Main_advectScalar)},
   {"advectVel", tfluids_(Main_advectVel)}, 
   {"vorticityConfinement", tfluids_(Main_vorticityConfinement)},
-  {"averageBorderCells", tfluids_(Main_averageBorderCells)},
-  {"setObstacleBcs", tfluids_(Main_setObstacleBcs)},
+  {"setGeomVelForAdvection", tfluids_(Main_setGeomVelForAdvection)},
   {"interpField", tfluids_(Main_interpField)},
   {"drawVelocityField", tfluids_(Main_drawVelocityField)},
   {"loadTensorTexture", tfluids_(Main_loadTensorTexture)},
@@ -1971,6 +2015,10 @@ static const struct luaL_Reg tfluids_(Main__) [] = {
   {"calcVelocityDivergenceBackward",
    tfluids_(Main_calcVelocityDivergenceBackward)},
   {"solveLinearSystemPCG", tfluids_(Main_solveLinearSystemPCG)},
+  {"volumetricUpSamplingNearestForward",
+   tfluids_(Main_volumetricUpSamplingNearestForward)},
+  {"volumetricUpSamplingNearestBackward",
+   tfluids_(Main_volumetricUpSamplingNearestBackward)},
   {NULL, NULL}  // NOLINT
 };
 

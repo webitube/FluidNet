@@ -679,3 +679,105 @@ function DataBinary:nsamples()
   -- Return the maximum number of image pairs we can support
   return self.samples:size(1)
 end
+
+function DataBinary:initThreadFunc()
+  -- Recall: All threads must be initialized with all classes and packages.
+  dofile('lib/fix_file_references.lua')
+  dofile('lib/load_package_safe.lua')
+  dofile('lib/data_binary.lua')
+end
+
+
+function DataBinary:calcDataStatistics(conf, mconf)
+  -- Calculate the mean and std of the input channels for each sample, and
+  -- plot it as a histogram.
+  
+  -- Parallelize data loading to increase disk IO.
+  local singleThreaded = false  -- Set to true for easier debugging.
+  local numThreads = 8
+  local batchSize = 16
+  local dataInds = torch.IntTensor(torch.range(1, self:nsamples()))
+  local parallel = torch.DataParallel(conf.numDataThreads, self, dataInds,
+                                      conf.batchSize, DataBinary.initThreadFunc,
+                                      singleThreaded)
+
+  -- We also want to calculate the divergence of the (divergent) U channel
+  -- input. This is because some models actually use this as input.
+  local divNet = nn.VelocityDivergence()
+
+  local mean = {}
+  local std = {}
+  local l2 = {}
+  print('Calculating mean and std statistics.')
+  local samplesProcessed = 0
+  repeat
+    -- Get the next batch.
+    local perturbData = conf.trainPerturb.on and training
+    local batch = parallel:getBatch(conf.batchSize, perturbData,
+                                    conf.trainPerturb, mconf.netDownsample,
+                                    conf.dataDir)
+    local batchCPU = batch.data
+    batchCPU.div = divNet:forward({batchCPU.UDiv, batchCPU.geom:select(2, 1)})
+
+    for key, value in pairs(batchCPU) do
+      local value1D = value:view(value:size(1), -1)  -- reshape [bs, -1]
+      local curMean = torch.mean(value1D, 2):squeeze()
+      local curStd = torch.std(value1D, 2):squeeze()
+      local curL2 = torch.norm(value1D, 2, 2):squeeze()
+      if mean[key] == nil then
+        mean[key] = {}
+      end
+      if std[key] == nil then
+        std[key] = {}
+      end
+      if l2[key] == nil then
+        l2[key] = {}
+      end
+      for i = 1, batch.batchSet:size(1) do
+        mean[key][#(mean[key]) + 1] = curMean[i]
+        std[key][#(std[key]) + 1] = curStd[i]
+        l2[key][#(l2[key]) + 1] = curL2[i]
+      end
+    end
+    samplesProcessed = samplesProcessed + batch.batchSet:size(1)
+    torch.progress(samplesProcessed, dataInds:size(1))
+  until parallel:empty()
+
+  for key, value in pairs(mean) do
+    mean[key] = torch.FloatTensor(value)
+  end
+  for key, value in pairs(std) do
+    std[key] = torch.FloatTensor(value)
+  end
+  for key, value in pairs(l2) do
+    l2[key] = torch.FloatTensor(value)
+  end
+
+  return mean, std, l2
+end
+
+function DataBinary:plotDataStatistics(mean, std, l2)
+  local function PlotStats(container, nameStr)
+    assert(gnuplot ~= nil, 'Plotting dataset stats requires gnuplot')
+    local numKeys = 0
+    for key, _ in pairs(container) do
+      numKeys = numKeys + 1
+    end
+    local nrow = math.floor(math.sqrt(numKeys))
+    local ncol = math.ceil(numKeys / nrow)
+    gnuplot.figure()
+    gnuplot.raw('set multiplot layout ' .. nrow .. ',' .. ncol)
+    local i = 0
+    for key, value in pairs(container) do
+      gnuplot.raw("set title '" .. self.prefix .. ' ' .. nameStr .. ': ' ..
+                  key .. "'")
+      gnuplot.raw('set xtics font ", 8" rotate by 45 right')
+      gnuplot.raw('set ytics font ", 8"')
+      gnuplot.hist(value, 100)
+    end
+    gnuplot.raw('unset multiplot')
+  end
+  PlotStats(mean, 'mean')
+  PlotStats(std, 'std')
+  PlotStats(l2, 'l2')
+end

@@ -36,7 +36,7 @@ dofile("lib/geom_import_binvox.lua")
 local conf = torch.defaultConf()
 conf.batchSize = 1
 conf.loadModel = true
-conf.visualizeData = false
+conf.visualizeData = true
 conf.saveData = true
 conf = torch.parseArgs(conf)  -- Overwrite conf params from the command line.
 assert(conf.batchSize == 1, 'The batch size must be one')
@@ -102,7 +102,14 @@ for key, value in pairs(batchCPU) do
   batchGPU[key] = value:cuda()
 end
 local frameCounter = 1
-local numFrames = 256
+local simulationTimeSec = 102.4
+local outputDecimation = 4  -- Set to 1 to disable. Output every 4 frames.
+
+local numFrames = simulationTimeSec / mconf.dt
+print('Simulating with dt = ' .. mconf.dt)
+print('Saving ever ' .. outputDecimation .. ' frames')
+print('Simulating for ' .. numFrames .. ' frames (' .. simulationTimeSec ..
+      'sec)')
 
 -- ****************************** DATA FUNCTIONS *******************************
 -- Set up a plume boundary condition.
@@ -133,7 +140,8 @@ gnuplot.hist(UMax, 200)
 -- ***************************** Create Voxel File ****************************
 local densityFile, densityFilename, geomFile, geomFilename
 if conf.saveData then
-  densityFilename = outDir .. '/density_output.vbox'
+  densityFilename = (outDir .. '/density_output_' .. conf.modelFilename ..
+                     '_dt' .. mconf.dt .. '.vbox')
   densityFile = torch.DiskFile(densityFilename,'w')
   densityFile:binary()
   densityFile:writeInt(res)
@@ -141,7 +149,8 @@ if conf.saveData then
   densityFile:writeInt(res)
   densityFile:writeInt(numFrames)
   
-  geomFilename = outDir .. '/geom_output.vbox'
+  geomFilename = (outDir .. '/geom_output_' .. conf.modelFilename ..
+                  '_dt' .. mconf.dt .. '.vbox')
   geomFile = torch.DiskFile(geomFilename,'w')
   geomFile:binary()
   geomFile:writeInt(res)
@@ -149,9 +158,6 @@ if conf.saveData then
   geomFile:writeInt(res)
   geomFile:writeInt(1)
 end
-
--- This is pretty aggressive.
-mconf.dt = 0.1
 
 local hImage
 if conf.visualizeData then
@@ -162,7 +168,6 @@ if conf.visualizeData then
 end
 
 -- ***************************** SIMULATION LOOP *******************************
--- Save a 2D slice just to visualize.
 for i = 1, numFrames do
   collectgarbage()
   print('Simulating frame ' .. i .. ' of ' .. numFrames)
@@ -178,10 +183,12 @@ for i = 1, numFrames do
           geom:squeeze():permute(3, 2, 1):float():contiguous():storage())
       print('  ==> Saved geom to ' .. geomFilename)
     end
-    -- Save greyscale density (so mean across RGB).
-    densityFile:writeFloat(density:mean(2):squeeze():permute(
-        3, 2, 1):float():contiguous():storage())
-    print('  ==> Saved density to ' .. densityFilename)
+    if math.fmod(i, outputDecimation) == 0 then
+      -- Save greyscale density (so mean across RGB).
+      densityFile:writeFloat(density:mean(2):squeeze():permute(
+          3, 2, 1):float():contiguous():storage())
+      print('  ==> Saved density to ' .. densityFilename)
+    end
   end
 
   if conf.visualizeData then
