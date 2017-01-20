@@ -45,40 +45,36 @@ function test.VelocityUpdateForward()
   local height = torch.random(16, 32)
   local width = torch.random(16, 32)
 
-  for matchManta = 0, 1 do
-    for twoDim = 1, 0, -1 do
-      local depth
-      if twoDim == 1 then
-        depth = 1
-      else
-        depth = torch.random(16, 32)
-      end
-
-      local p = torch.rand(bsize, 1, depth, height, width)
-      local geom = torch.rand(bsize, 1, depth, height, width):gt(0.8):double()
-
-      local mod = nn.VelocityUpdate(matchManta == 1)
-      local deltaU = mod:forward({p, geom})
-
-      -- Now use our ground truth lua function (which has been tested against
-      -- the actual manta data in
-      -- CNNFluids/torch/utils/test_calc_velocity_update.lua.
-      local deltaUGT = torch.Tensor()
-      if twoDim == 1 then
-        deltaUGT:resize(bsize, 2, depth, height, width)
-      else
-        deltaUGT:resize(bsize, 3, depth, height, width)
-      end
-      for b = 1, bsize do
-        torch.calcVelocityUpdate(deltaUGT[b], p[{b, 1}], geom[{b, 1}],
-                                 matchManta == 1)
-      end
-
-      local err = deltaUGT - deltaU
-      mytester:assertlt(err:abs():max(), precision,
-                        'fprop error: matchManta ' .. matchManta ..
-                        ', twoDim ' .. twoDim)
+  for twoDim = 1, 0, -1 do
+    local depth
+    if twoDim == 1 then
+      depth = 1
+    else
+      depth = torch.random(16, 32)
     end
+
+    local p = torch.rand(bsize, 1, depth, height, width)
+    local geom = torch.rand(bsize, 1, depth, height, width):gt(0.8):double()
+
+    local mod = nn.VelocityUpdate()
+    local deltaU = mod:forward({p, geom})
+
+    -- Now use our ground truth lua function (which has been tested against
+    -- the actual manta data in
+    -- CNNFluids/torch/utils/test_calc_velocity_update.lua.
+    local deltaUGT = torch.Tensor()
+    if twoDim == 1 then
+      deltaUGT:resize(bsize, 2, depth, height, width)
+    else
+      deltaUGT:resize(bsize, 3, depth, height, width)
+    end
+    for b = 1, bsize do
+      torch.calcVelocityUpdate(deltaUGT[b], p[{b, 1}], geom[{b, 1}])
+    end
+
+    local err = deltaUGT - deltaU
+    mytester:assertlt(err:abs():max(), precision,
+                      'fprop error: twoDim ' .. twoDim)
   end
 end
 
@@ -87,35 +83,32 @@ function test.VelocityUpdateBackward()
   local height = torch.random(8, 12)
   local width = torch.random(8, 12)
 
-  for matchManta = 0, 1 do
-    for twoDim = 1, 0, -1 do
-      local depth
-      if twoDim == 1 then
-        depth = 1
-      else
-        depth = torch.random(8, 12)
-      end
-      local p = torch.rand(bsize, 1, depth, height, width)
-      local geom = torch.rand(bsize, 1, depth, height, width):gt(0.8):double()
-      local mod = nn.Sequential()
-      -- InjectTensor is a custom module just for this test. It takes in 'p'
-      -- and a static 'geom' and simply outputs {p, geom}. It is so that the
-      -- Jacobian tester only tests the pressure input gradient.
-      mod:add(nn.InjectTensor(geom))
-      mod:add(nn.VelocityUpdate(matchManta == 1))
-
-      -- Test BPROP.
-      err = jac.testJacobian(mod, p)
-      mytester:assertlt(math.abs(err), precision,
-                        'bprop error: matchManta ' .. matchManta ..
-                        ', twoDim ' .. twoDim)
+  for twoDim = 1, 0, -1 do
+    local depth
+    if twoDim == 1 then
+      depth = 1
+    else
+      depth = torch.random(8, 12)
     end
+    local p = torch.rand(bsize, 1, depth, height, width)
+    local geom = torch.rand(bsize, 1, depth, height, width):gt(0.8):double()
+    local mod = nn.Sequential()
+    -- InjectTensor is a custom module just for this test. It takes in 'p'
+    -- and a static 'geom' and simply outputs {p, geom}. It is so that the
+    -- Jacobian tester only tests the pressure input gradient.
+    mod:add(nn.InjectTensor(geom))
+    mod:add(nn.VelocityUpdate())
+
+    -- Test BPROP.
+    err = jac.testJacobian(mod, p)
+    mytester:assertlt(math.abs(err), precision,
+                      'bprop error: twoDim ' .. twoDim)
   end
 end
 
 function test.VelocityUpdateCompareFEM()
   -- The no geometry case should be exactly the same as SpatialFiniteElements
-  -- and VolumetricFiniteElements (when matchManta == false).
+  -- and VolumetricFiniteElements.
   -- This makes sure that we AT LEAST haven't completely destroyed our
   -- old legacy model.
   local bsize = torch.random(1, 2)
@@ -131,8 +124,7 @@ function test.VelocityUpdateCompareFEM()
 
     local p = torch.rand(bsize, 1, depth, height, width)
     local geom = torch.zeros(bsize, 1, depth, height, width)
-    local matchManta = false
-    local mod = nn.VelocityUpdate(matchManta)
+    local mod = nn.VelocityUpdate()
     local deltaU = mod:forward({p, geom})
     local gradOutput = torch.rand(unpack(deltaU:size():totable()))
     local gradP = mod:backward({p, geom}, gradOutput)

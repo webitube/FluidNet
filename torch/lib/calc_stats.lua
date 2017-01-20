@@ -36,8 +36,7 @@ function torch.calcStats(input)
   local batchCPU = data:AllocateBatchMemory(conf.batchSize)
   local batchGPU = torch.deepClone(batchCPU, 'torch.CudaTensor')
 
-  local matchManta = false
-  local divNet = nn.VelocityDivergence(matchManta):cuda()
+  local divNet = nn.VelocityDivergence():cuda()
 
   -- For each sample we'll save a histogram of 10,000 bins of varying scales.
   local nHistBins = 10000

@@ -28,6 +28,24 @@ local ZFP_ACCURACY = 1e-5
 local DIV_THRESHOLD = 100  -- Relaxed threshold.
 local DEFAULT_BORDER_WIDTH = 1
 
+-- This is a little hacky to define these staticlly here, rather than
+-- import them from manta/source/grid.h (enum CellType in FlagGrid class).
+-- But there's no simple way to link C++ from Manta to lua here (we can't
+-- do it through tfluids, because tfluids would need manta as a dependency).
+local CELL_TYPE = {
+    TypeNone     = 0,
+    TypeFluid    = 1,
+    TypeObstacle = 2,
+    TypeEmpty    = 4,
+    TypeInflow   = 8,
+    TypeOutflow  = 16,
+    TypeOpen     = 32,
+    TypeStick    = 128,
+    TypeReserved = 256,
+    -- 2^10 - 2^14 reserved for moving obstacles
+    TypeZeroPressure = bit.lshift(1, 15)  -- Never used in our code.
+}
+
 -- @param bWidth: How much of the border to remove.
 function DataBinary:_loadFile(fn, bWidth)
   bWidth = bWidth or DEFAULT_BORDER_WIDTH

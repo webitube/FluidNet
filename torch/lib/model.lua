@@ -360,8 +360,7 @@ function torch.defineModelGraph(conf, mconf, data)
   p:annotate{name = 'pPred'}
 
   -- Construct a network to calculate the gradient of pressure.
-  local matchManta = true
-  local deltaUNet = nn.VelocityUpdate(matchManta)
+  local deltaUNet = nn.VelocityUpdate()
   -- Manta may have p in some unknown units.
   -- Therefore we should apply a constant scale to p in order to
   -- correct U (recall U = UDiv - grad(p)).

@@ -108,28 +108,6 @@ function tfluids.createPlumeBCs(batch, densityVal, uScale, rad)
   end
 end
 
--- As per the paper, we need to make sure that U interpolations at the geometry
--- boundary result in a zero U component along the face normal.
-local function setGeomVelForAdectionBatch(U, geom)
-  for b = 1, U:size(1) do
-    local curU = U[b]
-    local curGeom = geom[b]
-    tfluids.setGeomVelForAdvection(curU, curGeom)
-  end
-end
-
-local function setGeomVelBatch(U, geom)
-  assert(geom:dim() == 4)  -- expect (b x d x h x w)
-  assert(U:dim() == 5)
-
-  tfluids._invGeom = tfluids._invGeom or geom:clone()
-  tfluids._invGeom:fill(1):add(-1, geom)
-  local invGeom = tfluids._invGeom:view(geom:size(1), 1, geom:size(2),
-                                        geom:size(3), geom:size(4))
-  invGeom = invGeom:expandAs(U)
-  U:cmul(invGeom)  -- Will put zeros everywhere there is geometry.
-end
-
 -- We have some somewhat hacky boundary conditions, where we freeze certain
 -- values on every iteration of the solver. It is equivalent to setting internal
 -- fluid cells to not receive updates during the pressure projection.
@@ -270,10 +248,6 @@ function tfluids.simulate(conf, mconf, batch, model, outputDiv)
 
   local p, U, geom, density = tfluids.getPUGeomDensityReference(batch)
 
-  -- First set the internal geometry velocity to ensure that particle trace
-  -- U-interpolation results in zero velocity along the face normal.
-  setGeomVelForAdectionBatch(geom, U)
-
   -- First advect all scalar fields (density, temperature, etc).
   if density ~= nil then
     advectScalarBatch(mconf.dt, density, U, geom, mconf.advectionMethod)
@@ -282,11 +256,7 @@ function tfluids.simulate(conf, mconf, batch, model, outputDiv)
   -- Now self-advect velocity (must be advected last).
   advectVelocityBatch(mconf.dt, U, geom, mconf.advectionMethod)
 
-  -- Now revert the geometry velocity back to zero for solid cells. Note:
-  -- if we allowed geometry to have velocity we would set that here.
-  setGeomVelBatch(U, geom)
-
-  -- Also set the von neumann boundary conditions.
+  -- Set the manual boundary conditions.
   setBoundaryConditionsBatch(p, U, geom, density)
 
   -- Add external forces (buoyancy and gravity).
@@ -294,8 +264,8 @@ function tfluids.simulate(conf, mconf, batch, model, outputDiv)
     tfluids.buoyancyBatch(mconf.dt, density, U, geom, mconf.buoyancyScale)
   end
 
-  -- TODO(tompson,kris): Add support for gravity (easy to do, just add (-dt) * g
-  -- to the velocity field y component).
+  -- TODO(tompson,kris): Add support for gravity (easy to do, just add (-dt)
+  -- * g to the velocity field y component).
 
   -- Add vorticity confinement.
   if mconf.vorticityConfinementAmp > 0 then
@@ -308,6 +278,8 @@ function tfluids.simulate(conf, mconf, batch, model, outputDiv)
     return
   end
 
+  setBoundaryConditionsBatch(p, U, geom, density)
+
   -- FPROP the model to perform the pressure projection & velocity calculation.
   local modelOutput = model:forward(torch.getModelInput(batch))
 
@@ -317,7 +289,6 @@ function tfluids.simulate(conf, mconf, batch, model, outputDiv)
   U:copy(UPred)
 
   -- Again, make sure the boundary conditions we set are maintained.
-  setGeomVelBatch(U, geom)
   setBoundaryConditionsBatch(p, U, geom, density)
 
   -- Finally, clamp the velocity so that even if the sim blows up it wont blow

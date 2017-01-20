@@ -578,19 +578,19 @@ __global__ void kernel_calcVelocityUpdate(
   // the velocity update along a particular dimension.
 
   // Look at the neighbor to the right (pos) and to the left (neg).
-  bool geomPos = false;
-  bool geomNeg = false;
+  bool geom_pos = false;
+  bool geom_neg = false;
   if (pos[dim] <= 0) {
-    geomNeg = true;  // Treat going off the fluid as geometry.
+    geom_neg = true;  // Treat going off the fluid as geometry.
   }
   if (pos[dim] >= size[dim] - 1) {
-    geomPos = true;  // Treat going off the fluid as geometry. 
+    geom_pos = true;  // Treat going off the fluid as geometry. 
   }
   if (pos[dim] > 0) {
-    geomNeg = geom[batch][pos_n[2]][pos_n[1]][pos_n[0]] == 1.0f;
+    geom_neg = geom[batch][pos_n[2]][pos_n[1]][pos_n[0]] == 1.0f;
   }
   if (pos[dim] < size[dim] - 1) {
-    geomPos = geom[batch][pos_p[2]][pos_p[1]][pos_p[0]] == 1.0f; 
+    geom_pos = geom[batch][pos_p[2]][pos_p[1]][pos_p[0]] == 1.0f; 
   }
 
   // NOTE: The 0.5 below needs some explanation. We are exactly
@@ -601,7 +601,7 @@ __global__ void kernel_calcVelocityUpdate(
   // a * 0.5 term because we take the average.
   const float single_sided_gain = match_manta ? 0.5f : 1.0f;
 
-  if (geomPos and geomNeg) {
+  if (geom_pos and geom_neg) {
     // There are 3 cases:
     // A) Cell is on the left border and has a right geom neighbor.
     // B) Cell is on the right border and has a left geom neighbor.
@@ -609,7 +609,7 @@ __global__ void kernel_calcVelocityUpdate(
     // In any of these cases the velocity should not receive a
     // pressure gradient (nowhere for the pressure to diffuse.
     delta_u[batch][dim][pos[2]][pos[1]][pos[0]] = 0;
-  } else if (geomPos) {
+  } else if (geom_pos) {
     // There are 2 cases:
     // A) Cell is on the right border and there's fluid to the left.
     // B) Cell is internal but there is geom to the right.
@@ -617,7 +617,7 @@ __global__ void kernel_calcVelocityUpdate(
     delta_u[batch][dim][pos[2]][pos[1]][pos[0]] = single_sided_gain *
         (p[batch][pos[2]][pos[1]][pos[0]] -
          p[batch][pos_n[2]][pos_n[1]][pos_n[0]]);
-  } else if (geomNeg) {
+  } else if (geom_neg) {
     // There are 2 cases:
     // A) Cell is on the left border and there's fluid to the right.
     // B) Cell is internal but there is geom to the left.
@@ -726,32 +726,32 @@ __global__ void kernel_calcVelocityUpdateBackward(
     return;
   }
 
-  bool geomPos = false;
-  bool geomNeg = false;
+  bool geom_pos = false;
+  bool geom_neg = false;
   if (pos[dim] == 0) {
-    geomNeg = true;
+    geom_neg = true;
   }
   if (pos[dim] == size[dim] - 1) {
-    geomPos = true;
+    geom_pos = true;
   }
   if (pos[dim] > 0) {
-    geomNeg = geom[batch][pos_n[2]][pos_n[1]][pos_n[0]] == 1.0f;
+    geom_neg = geom[batch][pos_n[2]][pos_n[1]][pos_n[0]] == 1.0f;
   }
   if (pos[dim] < size[dim] - 1) {
-    geomPos = geom[batch][pos_p[2]][pos_p[1]][pos_p[0]] == 1.0f; 
+    geom_pos = geom[batch][pos_p[2]][pos_p[1]][pos_p[0]] == 1.0f; 
   }
   
   const float single_sided_gain = match_manta ? 0.5f : 1.0f;
-  if (geomPos and geomNeg) {
+  if (geom_pos and geom_neg) {
     // Output velocity update is zero.
     // --> No gradient contribution from this case (since delta_u == 0).
-  } else if (geomPos) {
+  } else if (geom_pos) {
     // Single sided diff to the left --> Spread the gradient contribution.
     atomicAdd(&grad_p[batch][pos[2]][pos[1]][pos[0]], single_sided_gain *
         grad_output[batch][dim][pos[2]][pos[1]][pos[0]]);
     atomicAdd(&grad_p[batch][pos_n[2]][pos_n[1]][pos_n[0]], -single_sided_gain *
         grad_output[batch][dim][pos[2]][pos[1]][pos[0]]);
-  } else if (geomNeg) {
+  } else if (geom_neg) {
     // Single sided diff to the right --> Spread the gradient contribution.
     atomicAdd(&grad_p[batch][pos_p[2]][pos_p[1]][pos_p[0]], single_sided_gain *
         grad_output[batch][dim][pos[2]][pos[1]][pos[0]]);
@@ -855,44 +855,46 @@ __global__ void kernel_calcVelocityDivergence(
     pos_n[dim] -= 1;
 
     // Look at the neighbor to the right (pos) and to the left (neg).
-    bool geomPos = false;
-    bool geomNeg = false;
+    bool out_of_bounds_pos = false;
+    bool out_of_bounds_neg = false;
     if (pos[dim] <= 0) {
-      geomNeg = true;  // Treat going off the fluid as geometry.
+      out_of_bounds_neg = true;
     }
     if (pos[dim] >= size[dim] - 1) {
-      geomPos = true;  // Treat going off the fluid as geometry. 
-    }
-    if (pos[dim] > 0) {
-      geomNeg = geom[batch][pos_n[2]][pos_n[1]][pos_n[0]] == 1.0f;
-    }
-    if (pos[dim] < size[dim] - 1) {
-      geomPos = geom[batch][pos_p[2]][pos_p[1]][pos_p[0]] == 1.0f;
+      out_of_bounds_pos = true;
     }
 
-    if (geomPos and geomNeg) {
-      // We are bordered by two geometry voxels OR one voxel and the border.
-      // Treat the current partial derivative w.r.t. dim as 0.
+    if (out_of_bounds_pos and out_of_bounds_neg) {
+      // This is a degenerate case and probably wont happen. The dimension is
+      // size 1 and so we should treat the partial derivative w.r.t. dim as 0.
       continue;
-    } else if (geomPos) {
-      // There are 2 cases:
-      // A) Cell is on the right border and there's fluid to the left.
-      // B) Cell is internal but there is geom to the right.
+    } else if (out_of_bounds_pos) {
+      // Cell is on the right border.
       // In this case we need to do a single sided diff to the left.
+      // An important note here: this is equivilent to setting a border of 1
+      // in manta that has the flags outFlow and fluid. It basically means that
+      // the simulation is NOT penalized for outflow out of the simulation
+      // boundary (i.e. there is NO divergence contribution from outside the
+      // simulation domain).
       u_div[batch][pos[2]][pos[1]][pos[0]] +=
           (u[batch][dim][pos[2]][pos[1]][pos[0]] -
            u[batch][dim][pos_n[2]][pos_n[1]][pos_n[0]]);
-    } else if (geomNeg) {
-      // There are 2 cases:
-      // A) Cell is on the left border and there's fluid to the right.
-      // B) Cell is internal but there is geom to the left.
+    } else if (out_of_bounds_neg) {
+      // Cell is on the left border.
       // In this case we need to do a single sided diff to the right.
+      // Note above applies here.
       u_div[batch][pos[2]][pos[1]][pos[0]] +=
           (u[batch][dim][pos_p[2]][pos_p[1]][pos_p[0]] -
            u[batch][dim][pos[2]][pos[1]][pos[0]]);
     } else {
-      // The pixel is internal (not on border) with no geom neighbours.
+      // The pixel is internal (not on border).
       // Do a central diff.
+      // A quick note here: Our slip boundary conditions internally means that
+      // we need to ensure that the normal velocity at the geom face is zero.
+      // We COULD interpolate the velocities at the half-step (cell edge) and
+      // calculate central differences there. However, this is actually
+      // equivalent to sampling into the geometry (with velocity zero) and
+      // doing central differences with a unit step on each side.
       u_div[batch][pos[2]][pos[1]][pos[0]] += 0.5f *
           (u[batch][dim][pos_p[2]][pos_p[1]][pos_p[0]] -
            u[batch][dim][pos_n[2]][pos_n[1]][pos_n[0]]);
@@ -973,29 +975,23 @@ __global__ void kernel_calcVelocityDivergenceBackward(
     pos_n[dim] -= 1;
 
     // Look at the neighbor to the right (pos) and to the left (neg).
-    bool geomPos = false;
-    bool geomNeg = false;
+    bool out_of_bounds_pos = false;
+    bool out_of_bounds_neg = false;
     if (pos[dim] <= 0) {
-      geomNeg = true;  // Treat going off the fluid as geometry.
+      out_of_bounds_neg = true;
     }
     if (pos[dim] >= size[dim] - 1) {
-      geomPos = true;  // Treat going off the fluid as geometry. 
-    }
-    if (pos[dim] > 0) {
-      geomNeg = geom[batch][pos_n[2]][pos_n[1]][pos_n[0]] == 1.0f;
-    }
-    if (pos[dim] < size[dim] - 1) {
-      geomPos = geom[batch][pos_p[2]][pos_p[1]][pos_p[0]] == 1.0f;
+      out_of_bounds_pos = true;
     }
 
-    if (geomPos and geomNeg) {
+    if (out_of_bounds_pos && out_of_bounds_neg) {
       continue;
-    } else if (geomPos) {
+    } else if (out_of_bounds_pos) {
       atomicAdd(&grad_u[batch][dim][pos[2]][pos[1]][pos[0]],
         grad_output[batch][pos[2]][pos[1]][pos[0]]);
       atomicAdd(&grad_u[batch][dim][pos_n[2]][pos_n[1]][pos_n[0]],
         -grad_output[batch][pos[2]][pos[1]][pos[0]]);
-    } else if (geomNeg) {
+    } else if (out_of_bounds_neg) {
       atomicAdd(&grad_u[batch][dim][pos_p[2]][pos_p[1]][pos_p[0]],
         grad_output[batch][pos[2]][pos[1]][pos[0]]);
       atomicAdd(&grad_u[batch][dim][pos[2]][pos[1]][pos[0]],

@@ -17,6 +17,9 @@ local torch = require('torch')
 -- Velocity update to mimic CorrectVelocity() in manta (line 57 of
 -- source/plugin/pressure.cpp). This function is slow and is JUST for testing.
 --
+-- NOTE: IT IS NOT THE SAME (OR IMPLEMENTED THE SAME WAY) AS OUR TFLUIDS
+-- VELOCITY UPDATE!!!
+--
 -- @param deltaU is the output (i.e. delta V). It's basically a pressure
 -- gradient with some boundary conditions handling.
 -- @param matchManta - boolean. If true then include manta's idiosyncrasies

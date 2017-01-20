@@ -59,13 +59,6 @@ rawset(tfluids, 'advectScalar', advectScalar)
 -- @param geom - input occupancy grid, size: (depth x height x width).
 -- @param uDst - Return (pre-allocated) velocity field, same size as u.
 -- @param method - OPTIONAL - "euler", "rk2" (default) or "maccormack".
---
--- NOTE: advectVel does not have a "sampleIntoGeom" parameter. We also
--- sample into geometry cells when advecting the velocity field. The particle
--- trace is still clamped at the geometry border, but the final bilinear sample
--- will sample INTO the geometry voxels. This assumes you have called
--- setObstacleBCS which will fill internal geometry cell velocities so that the
--- interpolated face velocity is zero along the face normal.
 local function advectVel(dt, u, geom, uDst, method)
   method = method or "rk2"
   -- Check arguments here (it's easier from lua).
@@ -118,22 +111,6 @@ local function vorticityConfinement(dt, scale, u, geom, curl, magCurl)
   u.tfluids.vorticityConfinement(dt, scale, u, geom, curl, magCurl)
 end
 rawset(tfluids, 'vorticityConfinement', vorticityConfinement)
-
--- Set internal obstacle velocity so that interpolations at the geometry face
--- result in zero velocity along the face normal.
--- @param U - Tensor of size (2/3 x depth x height x width).
--- @param geom - occupancy grid of size (depth x height x width).
-local function setGeomVelForAdvection(U, geom)
-  assert(torch.isTensor(U) and torch.isTensor(geom))
-  assert(U:dim() == 4, '4D tensor expected')
-  assert(geom:dim() == 3)
-  assert(geom:size(1) == U:size(2) and geom:size(2) == U:size(3) and
-         geom:size(3) == U:size(4))
-  assert(geom:isContiguous() and U:isContiguous())
-  U.tfluids.setGeomVelForAdvection(U, geom)
-end
-rawset(tfluids, 'setGeomVelForAdvection', setGeomVelForAdvection)
-
 
 -- Interpolate field (exposed for debugging) using trilinear interpolation.
 -- Can only interpolate positions within non-geometry cells (will throw an
@@ -189,23 +166,27 @@ end
 rawset(tfluids, 'loadTensorTexture', loadTensorTexture)
 
 -- calcVelocityUpdate assumes the input is batched.
-local function calcVelocityUpdate(deltaU, p, geom, matchManta)
-  assert(deltaU:dim() == 5 and p:dim() == 4 and geom:dim() == 4)
-  local nbatch = deltaU:size(1)
-  local twoDim = deltaU:size(2) == 2
-  local zdim = deltaU:size(3)
-  local ydim = deltaU:size(4)
-  local xdim = deltaU:size(5)
+-- Calculates: U = Udiv - grad(p)
+-- With some special handling for geometry cells!
+local function calcVelocityUpdate(U, UDiv, p, geom)
+  assert(U:dim() == 5 and UDiv:dim() == 5 and p:dim() == 4 and geom:dim() == 4)
+  local nbatch = U:size(1)
+  local twoDim = U:size(2) == 2
+  local zdim = U:size(3)
+  local ydim = U:size(4)
+  local xdim = U:size(5)
   if not twoDim then
-    assert(deltaU:size(2) == 3, 'Bad number of velocity slices')
+    assert(U:size(2) == 3, 'Bad number of velocity slices')
   end
+  assert(UDiv:isSameSizeAs(U))
   assert(p:isSameSizeAs(geom))
   assert(p:size(1) == nbatch)
   assert(p:size(2) == zdim)
   assert(p:size(3) == ydim)
   assert(p:size(4) == xdim)
-  assert(p:isContiguous() and deltaU:isContiguous() and geom:isContiguous())
-  deltaU.tfluids.calcVelocityUpdate(deltaU, p, geom, matchManta)
+  assert(p:isContiguous() and U:isContiguous() and geom:isContiguous() and
+         UDiv:isContiguous())
+  deltaU.tfluids.calcVelocityUpdate(U, UDiv, p, geom)
 end
 rawset(tfluids, 'calcVelocityUpdate', calcVelocityUpdate)
 
@@ -238,10 +219,11 @@ local function solveLinearSystemPCG(deltaU, p, geom, U)
 end
 rawset(tfluids, 'solveLinearSystemPCG', solveLinearSystemPCG)
 
--- Calculates the partial derivative of calcVelocityUpdate.
-local function calcVelocityUpdateBackward(gradP, p, geom, gradOutput,
-                                          matchManta)
+-- Calculates the partial derivative of calcVelocityUpdate w.r.t. p.
+-- It DOES NOT calculate the partial derivative w.r.t velocity.
+local function calcVelocityUpdateBackward(gradP, U, UDiv, p, geom, gradOutput)
   assert(gradP:dim() == 4, 'gradP must be 4D')
+  assert(U:dim() == 5 and UDiv:dim() == 5, 'U and UDiv must be 5D')
   assert(p:dim() == 4, 'p must be 4D')
   assert(geom:dim() == 4, 'geom must be 4D')
   assert(gradOutput:dim() == 5, 'gradOutput must be 5D')
@@ -251,15 +233,17 @@ local function calcVelocityUpdateBackward(gradP, p, geom, gradOutput,
   local ydim = gradP:size(3)
   local xdim = gradP:size(4)
   local twoDim = gradOutput:size(2) == 2
+  assert(U:isSameSizeAs(UDiv))
+  assert(U:isSameSizeAs(gradOutput))
   if not twoDim then
     assert(gradOutput:size(2) == 3, 'Bad number of velocity slices')
   else
     assert(zdim == 1, 'zdim is too large')
   end
   assert(p:isContiguous() and gradP:isContiguous() and geom:isContiguous()
-         and gradOutput:isContiguous())
-  gradP.tfluids.calcVelocityUpdateBackward(gradP, p, geom, gradOutput,
-                                           matchManta)
+         and gradOutput:isContiguous() and U:isContiguous() and
+         UDiv:isContiguous())
+  gradP.tfluids.calcVelocityUpdateBackward(gradP, U, UDiv, p, geom, gradOutput)
 end
 rawset(tfluids, 'calcVelocityUpdateBackward', calcVelocityUpdateBackward)
 

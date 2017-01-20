@@ -173,14 +173,13 @@ function test.calcVelocityUpdateCUDA()
 
   -- Test that the float and cuda implementations are the same.
   local batchSize = torch.random(1, 3)
-  local nchan = {2, 3, 2, 3}
-  local d = {1, torch.random(32, 64), 1, torch.random(32, 64)}
+  local nchan = {2, 3}
+  local d = {1, torch.random(32, 64), 1}
   local w = torch.random(32, 64)
   local h = torch.random(32, 64)
-  local case = {'2D', '3D', '2DMatchManta', '3DMatchManta'}
-  local matchManta = {false, false, true, true}
+  local case = {'2D', '3D'}
 
-  for testId = 1, 4 do
+  for testId = 1, #nchan do
     -- 2D and 3D cases.
     local geom = torch.rand(batchSize, d[testId], h, w):gt(0.8):float()
     local p = torch.rand(batchSize, d[testId], h, w):float()
@@ -188,12 +187,11 @@ function test.calcVelocityUpdateCUDA()
         torch.rand(batchSize, nchan[testId], d[testId], h, w):float()
 
     -- Perform the function on the CPU.
-    tfluids.calcVelocityUpdate(outputCPU, p, geom, matchManta[testId])
+    tfluids.calcVelocityUpdate(outputCPU, p, geom)
 
     -- Perform the function on the GPU.
     local outputGPU = outputCPU:clone():fill(math.huge):cuda()
-    tfluids.calcVelocityUpdate(outputGPU, p:cuda(), geom:cuda(),
-                               matchManta[testId])
+    tfluids.calcVelocityUpdate(outputGPU, p:cuda(), geom:cuda())
 
     -- Compare the results.
     local maxErr = (outputCPU - outputGPU:float()):abs():max()
@@ -205,12 +203,11 @@ function test.calcVelocityUpdateCUDA()
       torch.rand(batchSize, nchan[testId], d[testId], h, w):float()
 
     local gradPCPU = p:clone():fill(math.huge)
-    tfluids.calcVelocityUpdateBackward(gradPCPU, p, geom, gradOutput,
-                                       matchManta[testId])
+    tfluids.calcVelocityUpdateBackward(gradPCPU, p, geom, gradOutput)
 
     local gradPGPU = p:clone():fill(math.huge):cuda()
     tfluids.calcVelocityUpdateBackward(gradPGPU, p:cuda(), geom:cuda(),
-                                       gradOutput:cuda(), matchManta[testId])
+                                       gradOutput:cuda())
 
     maxErr = (gradPCPU - gradPGPU:float()):abs():max()
     mytester:assertlt(maxErr, precision,
@@ -218,11 +215,11 @@ function test.calcVelocityUpdateCUDA()
 
     profileCuda(tfluids.calcVelocityUpdate,
                 'calcVelocityUpdate' .. case[testId],
-                {outputCPU, p, geom, matchManta[testId]})
+                {outputCPU, p, geom})
 
     profileCuda(tfluids.calcVelocityUpdateBackward,
                 'calcVelocityUpdateBackward' .. case[testId],
-                {gradPCPU, p, geom, gradOutput, matchManta[testId]})
+                {gradPCPU, p, geom, gradOutput})
   end
 end
 

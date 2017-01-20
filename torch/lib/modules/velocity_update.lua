@@ -24,13 +24,8 @@ local tfluids = require('tfluids')
 local VelocityUpdate, parent =
   torch.class('nn.VelocityUpdate', 'nn.Module')
 
-function VelocityUpdate:__init(matchManta)
+function VelocityUpdate:__init()
   parent.__init(self)
-  if matchManta == nil then
-    self.matchManta = true
-  else
-    self.matchManta = matchManta
-  end
   self.gradInput = {torch.Tensor(), torch.Tensor()}
 end
 
@@ -54,7 +49,7 @@ function VelocityUpdate:updateOutput(input)
     self.output:resize(p:size(1), 3, p:size(2), p:size(3), p:size(4))
   end
 
-  tfluids.calcVelocityUpdate(self.output, p, geom, self.matchManta)
+  tfluids.calcVelocityUpdate(self.output, p, geom)
   return self.output 
 end
 
@@ -75,8 +70,7 @@ function VelocityUpdate:updateGradInput(input, gradOutput)
     gradP = gradP[{{}, 1}]  -- Remove the singleton dimension.
   end
 
-  tfluids.calcVelocityUpdateBackward(gradP, p, geom, gradOutput,
-                                     self.matchManta)
+  tfluids.calcVelocityUpdateBackward(gradP, p, geom, gradOutput)
   return self.gradInput
 end
 
