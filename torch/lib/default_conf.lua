@@ -70,7 +70,8 @@ function torch.defaultConf()
         UDiv = false,
       },
       lossFunc = 'fluid',  -- Only fluid is supported for now.
-      lossFuncScaleInvariant = false,  -- If true then use Eigen's scale inv MSE
+      lossFuncBorderWeight = 1,  -- 1 == disabled.
+      lossFuncBorderWidth = 3,  -- We linearly ramp from 1 to weight.
       lossPLambda = 0,
       lossULambda = 0,
       lossDivLambda = 1,

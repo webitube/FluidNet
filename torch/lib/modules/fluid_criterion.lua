@@ -25,25 +25,20 @@
 -- target[3] = flags (batch x 1 x depth x height x width)
 --
 -- So, for 2D fields, the size(2) of U is 2 and the depth is assumed to be 1.
---
--- If scaleInvariant == true, then we'll use David Eigen's scale invariant
--- criterion.
 
 local FluidCriterion, parent = torch.class('nn.FluidCriterion', 'nn.Criterion')
 
-function FluidCriterion:__init(pLambda, uLambda, divLambda, scaleInvariant)
+function FluidCriterion:__init(pLambda, uLambda, divLambdai, borderWeight,
+                               borderWidth)
   parent.__init(self)
 
-  if scaleInvariant == nil then
-    scaleInvariant = false
-  end
-
-  self.scaleInvariant = scaleInvariant
   self.pLambda = pLambda
   self.uLambda = uLambda
   self.divLambda = divLambda
+  self.borderWeight = borderWeight
+  self.borderWidth = borderWidth
 
-  if not self.scaleInvariant then
+  if borderWeight == 1 then
     -- Create the sub criterion for each term in the obj function.
     -- 1. Pressure loss.
     self._pLoss = nn.MSECriterion()
@@ -52,9 +47,11 @@ function FluidCriterion:__init(pLambda, uLambda, divLambda, scaleInvariant)
     -- 3. Divergence loss.
     self._divLoss = nn.MSECriterion()
   else
-    self._pLoss = nn.MSESICriterion(4)  -- numNonBatchDim
-    self._uLoss = nn.MSESICriterion(4)
-    self._divLoss = nn.MSESICriterion(4)
+    assert(borderWeight > 1 and borderWidth > 0 and
+           math.floor(borderWidth) == bborderWidth)
+    self._pLoss = nn.WeightedFlatMSECriterion()
+    self._uLoss = nn.WeightedFlatMSECriterion()
+    self._divLoss = nn.WeightedFlatMSECriterion()
   end
 
   -- Network to calculate velocity divergence.
@@ -132,16 +129,28 @@ function FluidCriterion:updateOutput(input, target)
   self._uLoss.sizeAverage = self.sizeAverage
   self._divLoss.sizeAverage = self.sizeAverage
 
+  if self.borderWeight ~= 1 then
+    -- Calculate the border weight.
+    self._weight = self._weight or flags:clone()
+    self._weight = self._weight:typeAs(flags):resizeAs(flags)
+    tfluids.signedDistanceField(flags, self.borderWidth, is3D, self._weight)
+    -- self._weight is now a linear ramp in [0, self.borderWidth] which measures
+    -- the distance to solid cells. We now need to turn this into an inverse.
+    self._weight:mul(-1 / self.borderWidth):add(1)  -- [1 to 0]
+    self._weight:mul(self.borderWeight):clamp(1, self.borderWeight)  -- [w to 1]
+    error('TODO(tompson): Check this visually.')
+  end
+
   -- FPROP each loss.
   if self.pLambda > 0 then
     self.pLoss = self.pLambda *
-        self._pLoss:updateOutput(pPred, pTarget)
+        self._pLoss:updateOutput(pPred, pTarget, self._weight)
   else
     self.pLoss = 0
   end
   if self.uLambda > 0 then
     self.uLoss = self.uLambda *
-        self._uLoss:updateOutput(UPred, UTarget)
+        self._uLoss:updateOutput(UPred, UTarget, self._weight)
   else
     self.uLoss = 0
   end
@@ -149,7 +158,7 @@ function FluidCriterion:updateOutput(input, target)
     -- Calculate the divergence of the predicted velocity.
     local divUPred = self._divNetwork:forward({UPred, flags})
     self.divLoss = self.divLambda *
-        self._divLoss:updateOutput(divUPred, divUTarget)
+        self._divLoss:updateOutput(divUPred, divUTarget, self._weight)
   else
     self.divLoss = 0
   end
@@ -172,17 +181,18 @@ function FluidCriterion:updateGradInput(input, target)
   -- Calculate the gradInput for each loss.
   local pGradInput
   if self.pLambda > 0 then
-    pGradInput = self._pLoss:updateGradInput(pPred, pTarget)
+    pGradInput = self._pLoss:updateGradInput(pPred, pTarget, self._weight)
     pGradInput:mul(self.pLambda)
   end
   local uGradInput
   if self.uLambda > 0 then
-    uGradInput = self._uLoss:updateGradInput(UPred, UTarget)
+    uGradInput = self._uLoss:updateGradInput(UPred, UTarget, self._weight)
     uGradInput:mul(self.uLambda)
   end
   local divGradInput
   if self.divLambda > 0 then
-    divGradInput = self._divLoss:updateGradInput(divUPred, divUTarget)
+    divGradInput = self._divLoss:updateGradInput(divUPred, divUTarget,
+                                                 self._weight)
     divGradInput:mul(self.divLambda)
     -- BPROP through the divergence network.
     divGradInput = self._divNetwork:updateGradInput({UPred, flags},

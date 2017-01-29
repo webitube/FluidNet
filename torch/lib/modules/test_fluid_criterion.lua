@@ -74,7 +74,7 @@ function test.FluidCriterion()
   local h = torch.random(4, 10)
   local w = torch.random(4, 10)
 
-  for scaleInvariant = 0, 1 do
+  for withBorderWeight do
     for sizeAverage = 0, 1 do
       for is3D = 0, 1 do
         for addP = 0, 1 do
@@ -97,13 +97,18 @@ function test.FluidCriterion()
               local pLambda = torch.rand(1):add(1)[1]  -- in [1, 2]
               local uLambda = torch.rand(1):add(1)[1]
               local divLambda = torch.rand(1):add(1)[1]
+              local borderWeight, borderWidth
+              if withBorderWeight == 1 then
+                borderWeight = torch.rand(1):add(2)[1]  -- in [2, 3]
+                borderWidth = torch.random(1, 4)
+              end
    
               pLambda = pLambda * addP
               uLambda = uLambda * addU
               divLambda = divLambda * addDiv
 
               local crit = nn.FluidCriterion(pLambda, uLambda, divLambda,
-                                             scaleInvariant == 1)
+                                             borderWeight, borderWidth)
               crit.sizeAverage = sizeAverage == 1
               local splitNet = nn.ConcatTable()
               splitNet:add(nn.Narrow(2, 1, 1))  -- pPred
